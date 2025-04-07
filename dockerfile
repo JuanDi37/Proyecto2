@@ -1,0 +1,1 @@
+docker run --name redis-login -p 6379:6379 -d redis

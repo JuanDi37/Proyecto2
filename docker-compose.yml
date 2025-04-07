@@ -1,27 +1,14 @@
-version: '3.8'
+version: "3.8"
 
 services:
-  db:
-    image: postgres
-    environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: online_store
+  redis:
+    image: redis:latest
+    container_name: redis-login
     ports:
-      - "5432:5432"
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: always
 
-  backend:
-    build: ./backend
-    depends_on:
-      - db
-    environment:
-      DATABASE_URL: postgresql://user:password@db/online_store
-    ports:
-      - "8000:8000"
-
-  frontend:
-    build: ./frontend
-    ports:
-      - "3000:3000"
-    depends_on:
-      - backend
+volumes:
+  redis-data:
