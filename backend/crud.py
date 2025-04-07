@@ -1,77 +1,108 @@
-# C:\Users\Juan Diego\Downloads\backend\crud.py
-
-from sqlalchemy.orm import Session
+# backend/crud.py
 from fastapi import HTTPException, status
-import models, schemas
+import schemas
 
-# CRUD functions for User
-def create_user(db: Session, user: schemas.UserCreate):
-    db_user = models.User(username=user.username, password=user.password)
-    db.add(db_user)
-    db.commit()
-    db.refresh(db_user)
-    return db_user
+# Funciones para User
+def create_user(r, user: schemas.UserCreate):
+    # Verificar que el nombre de usuario no exista (guardamos un mapping username -> id)
+    if r.exists(f"username:{user.username}"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Username already exists.")
+    user_id = r.incr("user:id")
+    key = f"user:{user_id}"
+    r.hset(key, mapping={"id": user_id, "username": user.username, "password": user.password})
+    r.set(f"username:{user.username}", user_id)
+    return {"id": user_id, "username": user.username}
 
-def authenticate_user(db: Session, user: schemas.UserLogin):
-    return db.query(models.User).filter(
-        models.User.username == user.username, 
-        models.User.password == user.password
-    ).first()
+def authenticate_user(r, user: schemas.UserLogin):
+    user_id = r.get(f"username:{user.username}")
+    if not user_id:
+        return None
+    key = f"user:{user_id}"
+    stored_password = r.hget(key, "password")
+    if stored_password == user.password:
+        return {"id": int(user_id), "username": user.username}
+    return None
 
-def get_user(db: Session, user_id: int):
-    return db.query(models.User).filter(models.User.id == user_id).first()
+def get_user(r, user_id: int):
+    key = f"user:{user_id}"
+    user_data = r.hgetall(key)
+    if not user_data:
+        return None
+    user_data["id"] = int(user_data["id"])
+    return user_data
 
-# CRUD functions for Product
-def create_product(db: Session, product: schemas.ProductCreate):
-    db_product = models.Product(**product.dict())
-    db.add(db_product)
-    db.commit()
-    db.refresh(db_product)
-    return db_product
+# Funciones para Product
+def create_product(r, product: schemas.ProductCreate):
+    product_id = r.incr("product:id")
+    key = f"product:{product_id}"
+    data = product.dict()
+    data["id"] = product_id
+    # Asignar stock por defecto (similar al campo "stock" en tu modelo original)
+    data.setdefault("stock", 10)
+    r.hset(key, mapping=data)
+    r.sadd("products", product_id)
+    return data
 
-def get_products(db: Session):
-    return db.query(models.Product).all()
+def get_products(r):
+    product_ids = r.smembers("products")
+    products = []
+    for pid in product_ids:
+        key = f"product:{pid}"
+        product = r.hgetall(key)
+        if product:
+            product["id"] = int(product["id"])
+            product["price"] = float(product["price"])
+            product["stock"] = int(product["stock"])
+            product["category_id"] = int(product["category_id"])
+            products.append(product)
+    return products
 
-# CRUD functions for Category
-def create_category(db: Session, category: schemas.ProductCategoryCreate):
-    db_category = models.ProductCategory(name=category.name)
-    db.add(db_category)
-    db.commit()
-    db.refresh(db_category)
-    return db_category
+# Funciones para Category
+def create_category(r, category: schemas.ProductCategoryCreate):
+    if r.exists(f"category:name:{category.name}"):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Category already exists.")
+    category_id = r.incr("category:id")
+    key = f"category:{category_id}"
+    data = {"id": category_id, "name": category.name}
+    r.hset(key, mapping=data)
+    r.set(f"category:name:{category.name}", category_id)
+    r.sadd("categories", category_id)
+    return data
 
-def get_categories(db: Session):
-    return db.query(models.ProductCategory).all()
+def get_categories(r):
+    category_ids = r.smembers("categories")
+    categories = []
+    for cid in category_ids:
+        key = f"category:{cid}"
+        cat = r.hgetall(key)
+        if cat:
+            cat["id"] = int(cat["id"])
+            categories.append(cat)
+    return categories
 
-
-def create_order(db: Session, cart: schemas.Cart, user_id: int = 1):
-    # Crear la orden sin hacer commit inmediato (para hacer la operación atómica)
-    order = models.Order(user_id=user_id)
-    db.add(order)
-    
+# Funciones para Order
+def create_order(r, cart: schemas.Cart, user_id: int = 1):
+    order_id = r.incr("order:id")
+    order_key = f"order:{order_id}"
+    r.hset(order_key, mapping={"id": order_id, "user_id": user_id})
+    order_items_key = f"order:{order_id}:items"
+    pipe = r.pipeline()
     for item in cart.items:
-        product = db.query(models.Product).filter(models.Product.id == item.product_id).first()
+        product_key = f"product:{item.product_id}"
+        product = r.hgetall(product_key)
         if not product:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Producto con id {item.product_id} no encontrado."
             )
-        if product.stock < item.quantity:
+        if int(product.get("stock", 0)) < item.quantity:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Stock insuficiente para el producto {product.name}. Disponible: {product.stock}"
+                detail=f"Stock insuficiente para el producto {product.get('name')}. Disponible: {product.get('stock')}"
             )
         # Reducir el stock
-        product.stock -= item.quantity
-        # Crear el item de la orden
-        order_item = models.OrderItem(
-            order_id=order.id, 
-            product_id=item.product_id, 
-            quantity=item.quantity
-        )
-        db.add(order_item)
-    
-    # Commit atómico de la orden y actualización de stock
-    db.commit()
-    db.refresh(order)
-    return {"order_id": order.id, "message": "Order created successfully"}
+        pipe.hincrby(product_key, "stock", -item.quantity)
+        # Guardar el item de la orden en una lista con el formato "product_id:quantity"
+        pipe.rpush(order_items_key, f"{item.product_id}:{item.quantity}")
+    pipe.execute()
+    return {"order_id": order_id, "message": "Order created successfully"}

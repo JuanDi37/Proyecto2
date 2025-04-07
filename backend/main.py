@@ -1,12 +1,8 @@
 # backend/main.py
 from fastapi import FastAPI, Depends, HTTPException
-from sqlalchemy.orm import Session
-from sqlalchemy import text  # Importación añadida
-from database import SessionLocal, engine, Base
 from fastapi.middleware.cors import CORSMiddleware
-import models, schemas, crud
-
-Base.metadata.create_all(bind=engine)
+from redis_client import redis_client
+import schemas, crud
 
 app = FastAPI()
 app.add_middleware(
@@ -17,35 +13,36 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+def get_redis():
+    return redis_client
 
 @app.post("/register")
-def register_user(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    return crud.create_user(db, user)
+def register_user(user: schemas.UserCreate, r = Depends(get_redis)):
+    return crud.create_user(r, user)
 
 @app.post("/login")
-def login_user(user: schemas.UserLogin, db: Session = Depends(get_db)):
-    return crud.authenticate_user(db, user)
+def login_user(user: schemas.UserLogin, r = Depends(get_redis)):
+    auth_user = crud.authenticate_user(r, user)
+    if not auth_user:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    return auth_user
 
 @app.get("/products")
-def get_products(db: Session = Depends(get_db)):
-    return crud.get_products(db)
+def get_products(r = Depends(get_redis)):
+    return crud.get_products(r)
 
 @app.get("/categories")
-def get_categories(db: Session = Depends(get_db)):
-    return crud.get_categories(db)
+def get_categories(r = Depends(get_redis)):
+    return crud.get_categories(r)
 
 @app.post("/checkout")
-def checkout(cart: schemas.Cart, db: Session = Depends(get_db)):
-    return crud.create_order(db, cart, user_id=1)
-
+def checkout(cart: schemas.Cart, r = Depends(get_redis)):
+    return crud.create_order(r, cart, user_id=1)
 
 @app.get("/health")
-def health_check(db: Session = Depends(get_db)):
-    result = db.execute(text("SELECT 1")).fetchone()  # Uso de text() añadido
-    return {"status": "ok", "result": result[0]}
+def health_check(r = Depends(get_redis)):
+    try:
+        r.ping()
+        return {"status": "ok", "result": "Redis is alive"}
+    except Exception:
+        raise HTTPException(status_code=500, detail="Redis error")

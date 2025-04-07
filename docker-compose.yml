@@ -1,21 +1,18 @@
 version: '3.8'
 
 services:
-  db:
-    image: postgres
-    environment:
-      POSTGRES_USER: user
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: online_store
+  redis:
+    image: redis:latest
     ports:
-      - "5432:5432"
+      - "6379:6379"
 
   backend:
     build: ./backend
     depends_on:
-      - db
+      - redis
     environment:
-      DATABASE_URL: postgresql://user:password@db/online_store
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     ports:
       - "8000:8000"
 

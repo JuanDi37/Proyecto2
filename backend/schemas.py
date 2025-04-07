@@ -1,9 +1,9 @@
-# C:\Users\Juan Diego\Downloads\backend\schemas.py
+# backend/schemas.py
 from pydantic import BaseModel
 from typing import List
 
 class UserBase(BaseModel):
-    username: str  # Antes decía email: str
+    username: str
 
 class UserCreate(UserBase):
     password: str
@@ -13,7 +13,6 @@ class UserResponse(UserBase):
     class Config:
         from_attributes = True
 
-# Product schema
 class ProductBase(BaseModel):
     name: str
     price: float
